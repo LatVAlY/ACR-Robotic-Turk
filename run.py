@@ -1,4 +1,5 @@
 import subprocess
+from servo_control import move_to_square, pick_up_piece, release_piece, home_position
 
 def clear_moves(file_path):
     try:
