@@ -18,6 +18,7 @@ class VisionMediaPipeDetector:
         self.hands = self.mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.7)
         self.face = self.mp_face.FaceMesh(static_image_mode=False, max_num_faces=1, min_detection_confidence=0.7)
         self.mp_draw = mp.solutions.drawing_utils
+        self.prev_x = 0  # For wave velocity
         
     def capture_frame(self):
         ret, frame = self.cap.read()
@@ -73,20 +74,16 @@ class VisionMediaPipeDetector:
         if hand_results.multi_hand_landmarks:
             for hand_landmarks in hand_results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
-                # Handshake/wave: Check palm open (fingers spread)
+                # Open palm: Fingers spread, palm facing camera
                 if len(hand_landmarks.landmark) > 0:
                     finger_tips = [4, 8, 12, 16, 20]  # Thumb, index, middle, ring, pinky tips
-                    palm_base = hand_landmarks.landmark[0].y
+                    palm_base = hand_landmarks.landmark[0].y  # Wrist
                     spread = sum(hand_landmarks.landmark[tip].y < palm_base for tip in finger_tips)
-                    if spread >= 4:  # Open palm
-                        # Wave: Velocity in x (left-right sweep)
-                        # Assume previous x (track in state)
-                        current_x = hand_landmarks.landmark[0].x
-                        if 'prev_x' in self.__dict__ and abs(current_x - self.prev_x) > 0.05:
-                            gesture = 'wave'
-                            confidence = 0.8
-                        self.prev_x = current_x
-        
+                    # Palm facing: Check z-depth (relative, approximate with x-variance low)
+                    palm_variance = np.var([lm.x for lm in hand_landmarks.landmark[0:5]])  # Wrist to base
+                    if spread >= 4 and palm_variance < 0.01:  # Open and facing (low side variance)
+                        gesture = 'open_palm'
+                        confidence = 0.8
         return gesture, confidence
 
     def detect_expression(self, frame):
@@ -99,8 +96,8 @@ class VisionMediaPipeDetector:
             for face_landmarks in face_results.multi_face_landmarks:
                 self.mp_draw.draw_landmarks(frame, face_landmarks, self.mp_face.FACEMESH_CONTOURS)
                 # Frown: Mouth corners down
-                left_corner = face_landmarks.landmark[61].y  # Mouth left
-                right_corner = face_landmarks.landmark[291].y  # Mouth right
+                left_corner = face_landmarks.landmark[61].y
+                right_corner = face_landmarks.landmark[291].y
                 nose = face_landmarks.landmark[1].y
                 if left_corner > nose and right_corner > nose:
                     expression = 'frown'
@@ -110,6 +107,22 @@ class VisionMediaPipeDetector:
                     expression = 'smile'
                     confidence = 0.7
         return expression, confidence
+
+    def track_open_palm(self):
+        frame = self.capture_frame()
+        if frame is None:
+            return None, 0.0
+        gesture, conf = self.detect_gestures(frame)
+        if gesture == 'open_palm' and conf >= 0.8:
+            # Map hand center (landmark 0) to (x,y) for arm follow (normalize to -10 to 10 cm)
+            hand_results = self.hands.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if hand_results.multi_hand_landmarks:
+                for hand_landmarks in hand_results.multi_hand_landmarks:
+                    hx = hand_landmarks.landmark[0].x * 20 - 10  # Scale to cm range
+                    hy = (1 - hand_landmarks.landmark[0].y) * 20 - 10  # Flip y, scale
+                    print(f"DEBUG: Open palm at ({hx:.1f}, {hy:.1f}) cm — arm following")
+                    return (hx, hy), conf
+        return None, 0.0
 
     def infer_move(self):
         frame = self.capture_frame()
@@ -141,7 +154,7 @@ class VisionMediaPipeDetector:
             move_uci = chess.square_name(from_square) + chess.square_name(to_square)
             if not current_grid[from_row, from_col] and current_grid[to_row, to_col]:
                 move_conf += 0.1
-        overall_conf = move_conf + gesture_conf * 0.2 + expr_conf * 0.1  # Weight gesture/expression
+        overall_conf = move_conf + gesture_conf * 0.2 + expr_conf * 0.1
         
         if overall_conf < 0.8:
             print(f"DEBUG: Low confidence ({overall_conf:.2f}) — retrying scan")
