@@ -27,15 +27,15 @@ def move_to_square(square):
     kit.servo[5].angle = 0  # Open
     print(f"Moved to {square}")
 
-def pick_up():
+def pick_up_piece():
     kit.servo[5].angle = 90  # Close gripper
     time.sleep(1)
 
-def release():
+def release_piece():
     kit.servo[5].angle = 0  # Open
     time.sleep(1)
 
-def home():
+def home_position():
     for i in range(6):
         kit.servo[i].angle = 90
     time.sleep(2)
