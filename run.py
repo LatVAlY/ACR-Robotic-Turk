@@ -26,11 +26,12 @@ script2 = 'GUI.py'  # User interface
 # Start the two processes in parallel
 print("Starting chess bot: AI backend + GUI...")
 process1 = subprocess.Popen([venv_python, script1])
-process2 = subprocess.Popen([venv_python, script2])
+# process2 = subprocess.Popen([venv_python, script2])
+process2 = None
 
 # Wait for both to finish
 process1.wait()
-process2.wait()
+# process2.wait()
 
 print("Game complete! Arm returning to home.")
 home_position()  # Park the arm safely
