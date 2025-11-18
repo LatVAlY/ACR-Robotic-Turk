@@ -1,0 +1,10 @@
+a_supplicant.conf
+      /etc/wpa_supplicant/wpa_supplicant.con
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=US
+
+network={
+    ssid="华联精品酒店8301"
+    psk="8888888"
+}

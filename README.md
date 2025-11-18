@@ -1,4 +1,3 @@
-
 # ARC: Python & Raspberry Pi Chess Robot
 
 ### Introduction & Goal
