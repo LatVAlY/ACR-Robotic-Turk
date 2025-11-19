@@ -84,8 +84,9 @@ class ChessBotClient:
                 continue
             
             move_uci, gesture, expression, conf = result
-            if move_uci and conf >= 0.8:
-                print(f"DEBUG: Detected move {move_uci} (conf {conf:.2f}, gesture {gesture}, expr {expression})")
+            conf_float = float(conf) if conf is not None else 0.0  # Fix: Convert str to float safely
+            if move_uci and conf_float >= 0.8:
+                print(f"DEBUG: Detected move {move_uci} (conf {conf_float:.2f}, gesture {gesture}, expr {expression})")
                 self.handle_move(move_uci)
                 if gesture == 'wave':
                     self.motion.home_position()  # Pause for wave response
