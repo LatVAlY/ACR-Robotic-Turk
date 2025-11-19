@@ -1,24 +1,23 @@
 from adafruit_servokit import ServoKit
 import math
 import time
-import sys
-import os
-
-# Add parent directory to Python path to import shared module
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import json
 from shared.utils import load_json
 
 class MotionController:
     def __init__(self):
         self.kit = ServoKit(channels=16)
-        # Use path relative to project root
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'shared', 'config.json')
-        self.config = load_json(config_path)
+        self.config = load_json('shared/config.json')
         self.arm_lengths = self.config['arm_lengths']  # e.g., {'l1': 5, 'l2': 7, 'l3': 3} cm
         self.square_size = self.config['square_size_cm']  # 2.5 cm per square
         for i in range(6):
             self.kit.servo[i].set_pulse_width_range(500, 2500)
+        self.init_servos()  # Wake servos to set initial angles
+
+    def init_servos(self):
+        for i in range(6):
+            self.kit.servo[i].angle = 90  # Set to neutral to avoid None
+            time.sleep(0.2)  # Short pause for stability
 
     def inverse_kinematics(self, x, y, z):
         # Base rotation (theta1)
@@ -47,6 +46,8 @@ class MotionController:
         return angles
 
     def ease_to_angle(self, servo_id, start, end, steps=20):
+        if start is None:
+            start = 90  # Fallback if initial angle not set
         for step in range(steps):
             angle = start + (end - start) * step / steps
             self.kit.servo[servo_id].angle = angle
