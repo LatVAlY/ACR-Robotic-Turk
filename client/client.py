@@ -2,10 +2,10 @@ import time
 import chess
 import requests
 
-from client.motion import MotionController
-from client.ux import UXHandler
-from client.vision_mediapip import VisionMediaPipeDetector
-from shared.utils import load_json
+from motion import MotionController
+from ux import UXHandler
+from vision_mediapip import VisionMediaPipeDetector
+from utils import load_json
 
 SERVER_URL = load_json('shared/config.json')['server_url']
 BOARD = chess.Board()

@@ -1,1 +1,6 @@
 /client/wheels
+/server/__pycache__
+/server/venv/
+client/__pycache__/
+client/venv/
+__pycache__/
