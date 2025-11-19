@@ -12,7 +12,9 @@ from shared.utils import load_json
 class MotionController:
     def __init__(self):
         self.kit = ServoKit(channels=16)
-        self.config = load_json('shared/config.json')
+        # Use absolute path to config file
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'shared', 'config.json')
+        self.config = load_json(config_path)
         self.arm_lengths = self.config['arm_lengths']  # e.g., {'l1': 5, 'l2': 7, 'l3': 3} cm
         self.square_size = self.config['square_size_cm']  # 2.5 cm per square
         for i in range(6):
