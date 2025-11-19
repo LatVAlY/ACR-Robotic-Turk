@@ -1,5 +1,5 @@
 {
-  "server_url": "http://192.168.1.100:5000",
+  "server_url": "192.168.1.184:8000",
   "arm_lengths": {"l1": 5, "l2": 7, "l3": 3},
   "vision_threshold": 128,
   "square_size_cm": 2.5
