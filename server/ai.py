@@ -1,6 +1,6 @@
 from stockfish import Stockfish
 
-STOCKFISH_PATH = '/Users/abdel_latrache/stockfish/stockfish'  # Update path
+STOCKFISH_PATH = '/opt/homebrew/bin/stockfish'  # Update path
 
 def predict_move(fen):
     stockfish = Stockfish(path=STOCKFISH_PATH, parameters={
