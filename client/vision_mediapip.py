@@ -24,53 +24,64 @@ class VisionMediaPipeDetector:
     def capture_frame(self):
         frame = self.picam2.capture_array()
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # OpenCV format
+
     def detect_grid(self, frame):
         print("DEBUG VISION: Capturing frame shape:", frame.shape)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Enhanced edges: Canny + Sobel for vertical bias
+        # Deblur & Enhance: Bilateral filter + CLAHE for low-light contrast
+        deblurred = cv2.bilateralFilter(gray, 9, 75, 75)  # Preserves edges, reduces blur
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(deblurred)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)  # Still blur for edges
+        
+        # Edges: Canny on enhanced + Sobel vert
         edges = cv2.Canny(blurred, 50, 150)
         sobelx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
         sobelx = cv2.convertScaleAbs(sobelx)
         edges_vert = cv2.Canny(sobelx, 50, 150)
         
-        # Hough on combined for horiz, vert-specific for verticals
-        lines_h = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=50, minLineLength=50, maxLineGap=10)
-        lines_v = cv2.HoughLinesP(edges_vert, 1, np.pi / 180, threshold=50, minLineLength=50, maxLineGap=10)
+        # Hough: Tighter params for blurry lines
+        lines_h = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=60, maxLineGap=15)
+        lines_v = cv2.HoughLinesP(edges_vert, 1, np.pi / 180, threshold=40, minLineLength=60, maxLineGap=15)
         
         horiz_lines = []
         vert_lines = []
         if lines_h is not None:
             for line in lines_h:
                 x1, y1, x2, y2 = line[0]
-                if abs(y1 - y2) < 10:  # Horizontal
+                if abs(y1 - y2) < 15:  # Looser angle tol for tilt
                     horiz_lines.append((min(x1, x2), y1, max(x1, x2), y2))
         if lines_v is not None:
             for line in lines_v:
                 x1, y1, x2, y2 = line[0]
-                if abs(x1 - x2) < 10:  # Vertical
+                if abs(x1 - x2) < 15:
                     vert_lines.append((x1, min(y1, y2), x2, max(y1, y2)))
         
         print(f"DEBUG VISION: Horiz lines: {len(horiz_lines)}, Vert lines: {len(vert_lines)}")
         
         warped = None
         if len(horiz_lines) >= 4 and len(vert_lines) >= 4:
-            # Cluster lines for 9 grid lines (8 squares)
-            def cluster_lines(lines, is_horiz=True):
+            # Improved clustering: Aim for 9 lines, with wider gap tol for blur
+            def cluster_lines(lines, is_horiz=True, num_target=9):
                 if not lines: return []
-                coords = [l[1] if is_horiz else l[0] for l in lines]  # y for horiz, x for vert
-                coords = sorted(set(coords))  # Unique sorted
+                coords = [l[1] if is_horiz else l[0] for l in lines]
+                coords = sorted(set(coords))
                 clusters = []
                 current = [coords[0]]
                 for coord in coords[1:]:
-                    if abs(coord - current[-1]) < 20:  # Gap threshold
+                    if abs(coord - current[-1]) < 30:  # Wider for broken lines
                         current.append(coord)
                     else:
                         clusters.append(np.mean(current))
                         current = [coord]
                 clusters.append(np.mean(current))
-                return sorted(clusters[:9])  # Top 9 clusters
+                # Select/Interpolate to ~num_target
+                if len(clusters) < num_target:
+                    # Simple interpolate if short
+                    step_h = (clusters[-1] - clusters[0]) / (num_target - 1)
+                    clusters = [clusters[0] + i * step_h for i in range(num_target)]
+                return sorted(clusters[:num_target])
             
             h_clusters = cluster_lines(horiz_lines, True)
             v_clusters = cluster_lines(vert_lines, False)
@@ -80,69 +91,81 @@ class VisionMediaPipeDetector:
                 left_v, right_v = v_clusters[0], v_clusters[-1]
                 h_board = bottom_h - top_h
                 w_board = right_v - left_v
-                if 0 < h_board < frame.shape[0] and 0 < w_board < frame.shape[1]:
+                if 100 < h_board < frame.shape[0]-100 and 100 < w_board < frame.shape[1]-100:  # Bounds check
                     src_points = np.float32([[left_v, top_h], [right_v, top_h], [right_v, bottom_h], [left_v, bottom_h]])
-                    dst_points = np.float32([[0, 0], [w_board, 0], [w_board, h_board], [0, h_board]])
+                    dst_points = np.float32([[0, 0], [512, 0], [512, 512], [0, 512]])  # Fixed square
                     matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-                    warped = cv2.warpPerspective(gray, matrix, (int(w_board), int(h_board)))
+                    warped = cv2.warpPerspective(enhanced, matrix, (512, 512))  # Use enhanced
                     print(f"DEBUG VISION: Clustered warp to {warped.shape}")
         
-        # Fallback contour (as before, but looser epsilon)
+        # Fallback: Enhanced contour
         if warped is None:
-            print("DEBUG VISION: Insufficient lines - trying contour detection for board")
-            edges_full = cv2.Canny(blurred, 50, 150)
-            contours, _ = cv2.findContours(edges_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            print("DEBUG VISION: Fallback to contour on enhanced")
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
-                largest_contour = max(contours, key=cv2.contourArea)
-                epsilon = 0.05 * cv2.arcLength(largest_contour, True)  # Looser
-                approx = cv2.approxPolyDP(largest_contour, epsilon, True)
-                if len(approx) == 4:
-                    src_points = approx.reshape(4, 2).astype(np.float32)
+                largest = max(contours, key=cv2.contourArea)
+                epsilon = 0.06 * cv2.arcLength(largest, True)  # Even looser for blur
+                approx = cv2.approxPolyDP(largest, epsilon, True)
+                if len(approx) >= 4:  # Accept near-quad
+                    src_points = approx.reshape(-1, 2).astype(np.float32)[:4]  # Take first 4
                     dst_points = np.float32([[0, 0], [512, 0], [512, 512], [0, 512]])
                     matrix = cv2.getPerspectiveTransform(src_points, dst_points)
-                    warped = cv2.warpPerspective(gray, matrix, (512, 512))
+                    warped = cv2.warpPerspective(enhanced, matrix, (512, 512))
                     print("DEBUG VISION: Contour warp successful")
         
         if warped is None:
-            print("DEBUG VISION: Using raw gray fallback")
-            warped = gray
-            h, w = warped.shape
+            print("DEBUG VISION: Raw fallback on enhanced")
+            h, w = enhanced.shape
             size = min(h, w)
-            start_y = (h - size) // 2
-            start_x = (w - size) // 2
-            warped = warped[start_y:start_y + size, start_x:start_x + size]
+            start_y, start_x = (h - size) // 2, (w - size) // 2
+            warped = enhanced[start_y:start_y + size, start_x:start_x + size]
             print(f"DEBUG VISION: Centered crop to {warped.shape}")
         
+        # Dynamic square_size
         h, w = warped.shape
-        self.square_size = min(h, w) // 8  # Dynamic
+        square_size = min(h // 8, w // 8)
+        self.square_size = square_size
         grid = np.zeros((8, 8), dtype=bool)
+        
         for row in range(8):
             for col in range(8):
                 y_start = row * (h // 8)
-                y_end = y_start + (h // 8)
+                y_end = (row + 1) * (h // 8)
                 x_start = col * (w // 8)
-                x_end = x_start + (w // 8)
+                x_end = (col + 1) * (w // 8)
                 square = warped[y_start:y_end, x_start:x_end]
                 
                 if square.size > 0:
-                    # Adaptive thresh + morph
-                    thresh = cv2.adaptiveThreshold(square, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                    kernel = np.ones((3,3), np.uint8)
+                    # Adaptive thresh + stronger morph for blur
+                    thresh = cv2.adaptiveThreshold(square, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 3)
+                    kernel = np.ones((2,2), np.uint8)  # Smaller for fine details
                     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+                    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)  # Remove noise
                     dark_ratio = np.sum(thresh == 0) / thresh.size
                     mean_val = np.mean(square)
+                    
+                    # Further relaxed + variance check (pieces have texture variance > empties)
+                    var_val = np.var(square)
+                    occupancy = (dark_ratio > 0.55) and (mean_val < 90) and (var_val > 200)  # Tune var for plastic texture
                 else:
-                    dark_ratio = 0.5
-                    mean_val = 128
+                    dark_ratio, mean_val, var_val = 0.5, 128, 0
+                    occupancy = False
                 
-                # Relaxed occupancy
-                occupancy = (dark_ratio > 0.6) and (mean_val < 80)
                 grid[row, col] = occupancy
-                print(f"DEBUG VISION: Square r{row}c{col}: mean={mean_val:.1f}, dark_ratio={dark_ratio:.2f}, occupied={occupancy}")
+                print(f"DEBUG VISION: Square r{row}c{col}: mean={mean_val:.1f}, dark={dark_ratio:.2f}, var={var_val:.0f}, occ={occupancy}")
         
-        print("DEBUG VISION: Full occupancy grid:\n", grid)
+        # Quick validation: Flip if upside-down (check occupied rows)
+        occupied_rows = np.sum(grid, axis=1)
+        if occupied_rows[0] > occupied_rows[7]:  # Black on top?
+            grid = np.flipud(grid)
+            print("DEBUG VISION: Auto-flipped grid for white-at-bottom")
+        
+        print("DEBUG VISION: Full grid:\n", grid)
         occupied_count = np.sum(grid)
-        print(f"DEBUG VISION: Total occupied squares: {occupied_count}/64")
+        print(f"DEBUG VISION: Total occupied: {occupied_count}/64")
+        
+        # Save warped for debug (optional, comment if not needed)
+        cv2.imwrite(f'warped_scan{self.scan_count}.jpg', warped)
         return grid
 
     def infer_move(self):
