@@ -15,8 +15,8 @@ class VisionMediaPipeDetector:
         self.picam2 = Picamera2()
         self.picam2.configure(self.picam2.create_preview_configuration(main={"size": (640, 480)}))
         self.picam2.start()
-        self.starting_fen = chess.Board().fen()  # Starting board FEN
-        self.previous_fen = self.starting_fen  # Initialize to starting position
+        self.previous_grid = None  # Raw grid for diff (initial sync)
+        self.previous_fen = chess.Board().fen()  # For chess validation only
         self.square_size = 80  # Pixels per square
         self.scan_count = 0  # For debug logging
         self.baseline_scans = 5  # First 5 scans sync without move
@@ -34,7 +34,7 @@ class VisionMediaPipeDetector:
         edges = cv2.Canny(blurred, 30, 100)  # Lowered thresholds for more edges
         
         # Use probabilistic Hough for better line detection
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=50, minLineLength=50, maxLineGap=20)  # Lowered params
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=30, minLineLength=30, maxLineGap=20)  # Lowered for more lines
         print(f"DEBUG VISION: Found {len(lines) if lines is not None else 0} lines")
         
         horiz_lines = []
@@ -120,8 +120,8 @@ class VisionMediaPipeDetector:
                     dark_ratio = 0.5
                     mean_val = 128
                 
-                # Tuned occupancy: Stricter for pieces (dark_ratio >0.6 OR mean <80)
-                occupancy = (dark_ratio > 0.6) or (mean_val < 80)
+                # Stricter occupancy: dark_ratio >0.7 AND mean <60 (for true pieces)
+                occupancy = (dark_ratio > 0.7) and (mean_val < 60)
                 grid[row, col] = occupancy
                 occupancy_stats.append((row, col, mean_val, dark_ratio, occupancy))
                 print(f"DEBUG VISION: Square r{row}c{col}: mean={mean_val:.1f}, dark_ratio={dark_ratio:.2f}, occupied={occupancy}")
@@ -140,16 +140,16 @@ class VisionMediaPipeDetector:
             return (None, None, None, 0.0)
         
         current_grid = self.detect_grid(frame)
-        current_fen = grid_to_fen(current_grid)
-        print(f"DEBUG VISION: Current FEN: {current_fen}")
-        print("DEBUG VISION: Previous FEN: ", self.previous_fen)
         
-        # Always compute diff, even if FEN same (FEN might not capture all due to utils)
-        old_grid = fen_to_grid(self.previous_fen)
-        print("DEBUG VISION: Old grid:\n", old_grid)
-        print("DEBUG VISION: Current grid:\n", current_grid)
+        # Baseline sync for first scans
+        if self.scan_count <= self.baseline_scans:
+            print("DEBUG VISION: Baseline scan — setting previous grid and FEN")
+            self.previous_grid = current_grid.copy()
+            self.previous_fen = grid_to_fen(current_grid)
+            return (None, None, None, 0.0)
         
-        diff = current_grid ^ old_grid
+        # Grid diff for changes (raw occupancy)
+        diff = current_grid ^ self.previous_grid
         print("DEBUG VISION: Diff grid (changes):\n", diff)
         num_changes = np.sum(diff)
         print(f"DEBUG VISION: Num changes: {num_changes}")
@@ -160,22 +160,21 @@ class VisionMediaPipeDetector:
         
         if num_changes == 0:
             print("DEBUG VISION: No changes — skipping")
-            self.previous_fen = current_fen
             return (None, None, None, 0.0)
         elif num_changes == 2:
             # Single move
             rows, cols = change_positions
-            from_idx = 0 if old_grid[rows[0], cols[0]] else 1
+            from_idx = 0 if self.previous_grid[rows[0], cols[0]] else 1
             to_idx = 1 - from_idx
             from_row, from_col = rows[from_idx], cols[from_idx]
             to_row, to_col = rows[to_idx], cols[to_idx]
-            if old_grid[from_row, from_col] and not current_grid[from_row, from_col] and \
-               not old_grid[to_row, to_col] and current_grid[to_row, to_col]:
+            if self.previous_grid[from_row, from_col] and not current_grid[from_row, from_col] and \
+               not self.previous_grid[to_row, to_col] and current_grid[to_row, to_col]:
                 from_square = chess.square(from_col, 7 - from_row)
                 to_square = chess.square(to_col, 7 - to_row)
                 move_uci = chess.square_name(from_square) + chess.square_name(to_square)
                 move_conf = 0.9
-                # Legal check
+                # Legal check on FEN
                 temp_board = chess.Board(self.previous_fen)
                 if chess.Move.from_uci(move_uci) in temp_board.legal_moves:
                     move_conf += 0.1
@@ -183,31 +182,30 @@ class VisionMediaPipeDetector:
             else:
                 print("DEBUG VISION: Diff not from->to pattern")
         elif 2 < num_changes <= 4:
-            # Possible capture (3 changes: from empty, to occupied, captured empty) or promotion/error
-            move_conf = 0.6  # Lower for multi
-            print("DEBUG VISION: Multi-change detected — attempting pair match")
-            # Simple: Find largest change (by mean diff) as from/to
-            # But for now, flag for manual or skip
-            print("DEBUG VISION: Need better multi-move logic (e.g., find from/to + capture)")
+            print("DEBUG VISION: Multi-change (possible capture) — skipping for now")
+            move_conf = 0.6
         else:
-            print(f"DEBUG VISION: Too many changes ({num_changes}) — board setup or error, forcing sync")
-            move_conf = 0.0  # But sync board below
+            print(f"DEBUG VISION: Too many changes ({num_changes}) — forcing sync")
+            move_conf = 0.0
         
         print(f"DEBUG VISION: Final move_uci='{move_uci}', conf={move_conf:.2f}")
         
-        # Periodic full sync to handle setup/multi-moves
-        if self.scan_count % 3 == 0 or num_changes > 4:  # Every 3rd scan or big diff
-            print("DEBUG VISION: Periodic sync — updating previous to current")
-            self.previous_fen = current_fen
-            sync_conf = 0.7 if num_changes < 20 else 0.4  # High if reasonable pieces
-            return (None, None, None, sync_conf)  # Signal sync in client?
+        # Periodic full sync
+        if self.scan_count % 3 == 0 or num_changes > 4:
+            print("DEBUG VISION: Periodic sync — updating previous")
+            self.previous_grid = current_grid.copy()
+            self.previous_fen = grid_to_fen(current_grid)
+            sync_conf = 0.7 if num_changes < 10 else 0.4
+            return (None, None, None, sync_conf)
         
-        if move_conf < 0.6:  # Lowered threshold
-            print("DEBUG VISION: Low confidence — updating FEN but no move")
-            self.previous_fen = current_fen
+        if move_conf < 0.6:
+            print("DEBUG VISION: Low confidence — updating previous but no move")
+            self.previous_grid = current_grid.copy()
+            self.previous_fen = grid_to_fen(current_grid)
             return (None, None, None, move_conf)
         
-        self.previous_fen = current_fen
+        self.previous_grid = current_grid.copy()
+        self.previous_fen = grid_to_fen(current_grid)
         print(f"DEBUG VISION: Returning inferred move {move_uci} with conf {move_conf:.2f}")
         return (move_uci, None, None, move_conf)  # Full tuple
 
