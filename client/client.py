@@ -67,6 +67,7 @@ class ChessBotClient:
                 self.retry_count = 0
     
     def reset_game(self):
+        global BOARD
         BOARD = chess.Board()
         self.motion.home_position()
         self.ux.speak("Game reset — your turn.")
@@ -76,7 +77,13 @@ class ChessBotClient:
         self.motion.home_position()
         
         while self.game_active:
-            move_uci, gesture, expression, conf = self.vision.infer_move()
+            result = self.vision.infer_move()
+            if result is None:
+                print("DEBUG: No move detected (low confidence) — scanning...")
+                time.sleep(2)
+                continue
+            
+            move_uci, gesture, expression, conf = result
             if move_uci and conf >= 0.8:
                 print(f"DEBUG: Detected move {move_uci} (conf {conf:.2f}, gesture {gesture}, expr {expression})")
                 self.handle_move(move_uci)
