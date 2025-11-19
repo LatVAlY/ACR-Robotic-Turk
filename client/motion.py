@@ -61,23 +61,22 @@ class MotionController:
         else:
             print("Cannot fold.")
 
-    def unfold_to_normal(self):
-        if self.state == 'folded':
+    def unfold_to_normal(self, force=False):
+        if self.state == 'folded' or force:
             print("Unfolding to normal position...")
             hinge_chs = self.channels['fold_hinges']
             for ch in hinge_chs:
-                self.ease_to_angle(ch, self.kit.servo[ch].angle, self.fold_angles['park'])  # Open hinges
+                self.ease_to_angle(ch, self.kit.servo[ch].angle, self.fold_angles['park'])
             time.sleep(1)
-            # Drop shoulder to ready pose
             shoulder_ch = self.channels['shoulder']
             self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['park'])
             self.state = 'unfolded'
             self.wake_up()
             self.rotation_enabled = True
             self.init_servos()
-            print("Robot unfolded (ready pose) and on.")
+            print("Robot unfolded and on.")
         else:
-            print("Cannot unfold.")  
+            print("Already unfolded—no action.") 
 
     def turn_off(self):
         if self.power_on:
