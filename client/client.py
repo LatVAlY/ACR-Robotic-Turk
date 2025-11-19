@@ -77,6 +77,12 @@ class ChessBotClient:
         self.motion.home_position()
         
         while self.game_active:
+            print("=== SCAN START ===")
+            print("Current board positions:")
+            print(BOARD)  # Prints ASCII board with positions
+            print(f"FEN: {BOARD.fen()}")
+            print("==================")
+            
             result = self.vision.infer_move()
             if result is None:
                 print("DEBUG: No move detected (low confidence) — scanning...")
