@@ -17,6 +17,9 @@ class MotionController:
         self.config = load_json(config_path)
         self.arm_lengths = self.config['arm_lengths']  # e.g., {'l1': 5, 'l2': 7, 'l3': 3} cm
         self.square_size = self.config['square_size_cm']  # 2.5 cm per square
+        self.channels = self.config.get('servo_channels', {})  # Load channels
+        self.fold_angles = self.config.get('fold_angles', {'park': 90, 'stand_up': 0, 'lay_down': 180})
+        self.kit = ServoKit(channels=16)
         for i in range(6):
             self.kit.servo[i].set_pulse_width_range(500, 2500)
         # New state vars
@@ -26,9 +29,79 @@ class MotionController:
         self.init_servos()  # Wake servos to set initial angles
 
     def init_servos(self):
+        # Park arm + hinges
+        for name, ch in self.channels.items():
+            if name == 'fold_hinges':
+                for c in ch:
+                    self.kit.servo[c].angle = self.fold_angles['park']
+            else:
+                self.kit.servo[ch].angle = self.fold_angles['park']
+        time.sleep(0.5)
+
+    def home_position(self):
+        # Home arm (0-5) + lift shoulder to stand_up
         for i in range(6):
-            self.kit.servo[i].angle = 90  # Set to neutral to avoid None
-            time.sleep(0.2)  # Short pause for stability
+            self.ease_to_angle(i, self.kit.servo[i].angle, self.fold_angles['park'])
+        shoulder_ch = self.channels['shoulder']
+        self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['stand_up'])
+        time.sleep(1)
+
+    def fold_to_position(self):
+        if self.state == 'unfolded' and self.power_on:
+            print("Folding to storage position...")
+            self.home_position()  # Stands up first
+            hinge_chs = self.channels['fold_hinges']
+            for ch in hinge_chs:
+                self.ease_to_angle(ch, self.kit.servo[ch].angle, 0)  # Fold closed
+            time.sleep(1)
+            self.state = 'folded'
+            self.rotation_enabled = False
+            self.turn_off()
+            print("Robot folded (standing) and off.")
+        else:
+            print("Cannot fold.")
+
+    def unfold_to_normal(self):
+        if self.state == 'folded':
+            print("Unfolding to normal position...")
+            hinge_chs = self.channels['fold_hinges']
+            for ch in hinge_chs:
+                self.ease_to_angle(ch, self.kit.servo[ch].angle, self.fold_angles['park'])  # Open hinges
+            time.sleep(1)
+            # Drop shoulder to ready pose
+            shoulder_ch = self.channels['shoulder']
+            self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['park'])
+            self.state = 'unfolded'
+            self.wake_up()
+            self.rotation_enabled = True
+            self.init_servos()
+            print("Robot unfolded (ready pose) and on.")
+        else:
+            print("Cannot unfold.")  
+
+    def turn_off(self):
+        if self.power_on:
+            self.power_on = False
+            for ch in range(16):
+                self.kit.servo[ch].angle = self.fold_angles['park']
+            print("Power off: All parked.")
+
+    def wake_up(self):
+        if not self.power_on:
+            self.power_on = True
+            self.init_servos()
+            print("Power on.")
+
+    def attempt_rotate(self, degrees=180):
+        if self.state == 'folded' or not self.power_on:
+            print("Cannot rotate.")
+            return False
+        rot_ch = self.channels['rotation']
+        start = self.kit.servo[rot_ch].angle
+        target = min(180, (start + degrees) % 360)
+        self.ease_to_angle(rot_ch, start, target)
+        print("Rotation done.")
+        return True              
 
     def inverse_kinematics(self, x, y, z):
         # Base rotation (theta1)
@@ -91,11 +164,6 @@ class MotionController:
         self.ease_to_angle(5, self.kit.servo[5].angle, 0)  # Open gripper
         time.sleep(0.5)
 
-    def home_position(self):
-        for i in range(6):
-            self.ease_to_angle(i, self.kit.servo[i].angle, 90)
-        time.sleep(1)
-
     def execute_move(self, from_square, to_square):
         try:
             self.home_position()
@@ -109,74 +177,6 @@ class MotionController:
             print(f"Motion error: {e} — retrying home")
             self.home_position()
             return False
-
-    # NEW: Fold to storage (power off, lock rotation)
-    def fold_to_position(self):
-        if self.state == 'unfolded' and self.power_on:
-            print("Folding to storage position...")
-            # Park arm safely
-            self.home_position()
-            # Fold case servos (tune channels for your hinge mechanism)
-            for i in [10, 11, 12]:  # Example: 3 servos for fold
-                self.ease_to_angle(i, self.kit.servo[i].angle, 0)  # Close/fold angle
-            time.sleep(1)
-            self.state = 'folded'
-            self.rotation_enabled = False
-            self.turn_off()
-            print("Robot folded and powered off.")
-        else:
-            print("Cannot fold: already folded or off.")
-
-    # NEW: Unfold to play (power on, enable rotation)
-    def unfold_to_normal(self):
-        if self.state == 'folded':
-            print("Unfolding to normal position...")
-            # Unfold case servos
-            for i in [10, 11, 12]:
-                self.ease_to_angle(i, self.kit.servo[i].angle, 90)  # Open/unfold angle
-            time.sleep(1)
-            self.state = 'unfolded'
-            self.wake_up()
-            self.rotation_enabled = True
-            self.init_servos()  # Re-wake arm
-            print("Robot unfolded and powered on.")
-        else:
-            print("Cannot unfold: already unfolded.")
-
-    # NEW: Soft power off (park all servos)
-    def turn_off(self):
-        if self.power_on:
-            self.power_on = False
-            # Park everything safe
-            for i in range(16):  # All channels
-                self.kit.servo[i].angle = 90
-            # Optional: os.system('sudo shutdown -h now') for full Pi off
-            print("Power off: Servos parked, peripherals disabled.")
-
-    # NEW: Soft power on (re-init)
-    def wake_up(self):
-        if not self.power_on:
-            self.power_on = True
-            print("Power on: Systems initialized, servos active.")
-            # Add camera/vision re-start here if integrated
-
-    # NEW: Rotate board (locked if folded/off)
-    def attempt_rotate(self, degrees=180):
-        if self.state == 'folded' or not self.power_on:
-            print("Cannot rotate: Robot is folded or powered off!")
-            return False
-        if not self.rotation_enabled:
-            print("Rotation not enabled.")
-            return False
-        print(f"Rotating board {degrees} degrees...")
-        # Rotation servo (tune channel)
-        rotation_id = 6  # Your board spin servo
-        start_angle = self.kit.servo[rotation_id].angle
-        target_angle = (start_angle + degrees) % 360  # Mod 360, but clamp 0-180 if needed
-        self.ease_to_angle(rotation_id, start_angle, target_angle)
-        time.sleep(1)  # Rotate time
-        print("Rotation complete.")
-        return True
 
 # Quick Usage Example (add to your main script)
 if __name__ == "__main__":
