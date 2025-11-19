@@ -25,6 +25,7 @@ class ChessBotClient:
         self.game_active = True
         self.retry_count = 0
         self.max_retries = 3
+        self.scan_count = 0  # New: Counter for scans to log every N scans if too verbose
         
     def send_to_server(self, move_uci):
         payload = {'move': move_uci, 'fen': BOARD.fen()}
@@ -77,28 +78,45 @@ class ChessBotClient:
         self.motion.home_position()
         
         while self.game_active:
-            print("=== SCAN START ===")
-            print("Current board positions:")
-            print(BOARD)  # Prints ASCII board with positions
-            print(f"FEN: {BOARD.fen()}")
-            print("==================")
+            self.scan_count += 1
+            print(f"\n=== SCAN #{self.scan_count} START ===")
+            print("Current software board positions:")
+            print(BOARD)  # ASCII board with positions
+            print(f"Software FEN: {BOARD.fen()}")
             
+            # New: Enhanced vision debugging - always log raw result
             result = self.vision.infer_move()
+            print(f"Raw vision result: {result}")  # Full tuple or None
+            
             if result is None:
                 print("DEBUG: No move detected (low confidence) — scanning...")
                 time.sleep(2)
                 continue
             
             move_uci, gesture, expression, conf = result
-            conf_float = float(conf) if conf is not None else 0.0  # Fix: Convert str to float safely
+            conf_float = float(conf) if conf is not None else 0.0
+            print(f"Parsed vision: move_uci='{move_uci}' (type: {type(move_uci)}), "
+                  f"gesture='{gesture}', expression='{expression}', conf={conf_float} (raw: {conf}, type: {type(conf)})")
+            
+            # New: Log potential moves even below threshold for debugging
+            if move_uci:
+                print(f"DEBUG: Potential move {move_uci} at conf {conf_float:.2f} "
+                      f"(threshold 0.8) — {'ACCEPTED' if conf_float >= 0.8 else 'REJECTED'}")
+            else:
+                print("DEBUG: No move_uci in result — ignoring.")
+            
             if move_uci and conf_float >= 0.8:
-                print(f"DEBUG: Detected move {move_uci} (conf {conf_float:.2f}, gesture {gesture}, expr {expression})")
+                print(f"DEBUG: Processing detected move {move_uci} (conf {conf_float:.2f}, gesture {gesture}, expr {expression})")
                 self.handle_move(move_uci)
                 if gesture == 'wave':
                     self.motion.home_position()  # Pause for wave response
                     self.ux.speak("Wave received — hello!")
                 if expression == 'frown':
                     self.ux.speak("Tough move? Keep going — you're improving!")
+            else:
+                print("DEBUG: Skipping — low conf or no move.")
+            
+            print("=== SCAN END ===\n")
             time.sleep(2)  # Scan interval
         
         self.vision.close()
