@@ -15,9 +15,11 @@ class VisionMediaPipeDetector:
         self.picam2 = Picamera2()
         self.picam2.configure(self.picam2.create_preview_configuration(main={"size": (640, 480)}))
         self.picam2.start()
-        self.previous_fen = chess.Board().fen()
+        self.starting_fen = chess.Board().fen()  # Starting board FEN
+        self.previous_fen = self.starting_fen  # Initialize to starting position
         self.square_size = 80  # Pixels per square
-        self.scan_count = 0  # New: For debug logging
+        self.scan_count = 0  # For debug logging
+        self.baseline_scans = 5  # First 5 scans sync without move
 
     def capture_frame(self):
         frame = self.picam2.capture_array()
@@ -27,11 +29,11 @@ class VisionMediaPipeDetector:
         print("DEBUG VISION: Capturing frame shape:", frame.shape)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # New: Pre-process for better edges - Gaussian blur to reduce noise
+        # Pre-process for better edges - Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 30, 100)  # Lowered thresholds for more edges
         
-        # New: Use probabilistic Hough for better line detection
+        # Use probabilistic Hough for better line detection
         lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=50, minLineLength=50, maxLineGap=20)  # Lowered params
         print(f"DEBUG VISION: Found {len(lines) if lines is not None else 0} lines")
         
@@ -71,7 +73,7 @@ class VisionMediaPipeDetector:
                 print("DEBUG VISION: Invalid bounds - fallback")
         else:
             print("DEBUG VISION: Insufficient lines - trying contour detection for board")
-            # New: Contour-based board detection as fallback
+            # Contour-based board detection as fallback
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 # Find largest quadrilateral contour (approx board)
@@ -109,7 +111,7 @@ class VisionMediaPipeDetector:
                 x_end = x_start + (w // 8)
                 square = warped[y_start:y_end, x_start:x_end]
                 
-                # New: Adaptive threshold with Otsu for better occupancy (edges/darkness)
+                # Adaptive threshold with Otsu for better occupancy (edges/darkness)
                 if square.size > 0:
                     _, thresh = cv2.threshold(square, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                     dark_ratio = np.sum(thresh == 0) / thresh.size  # Fraction dark pixels
@@ -118,8 +120,8 @@ class VisionMediaPipeDetector:
                     dark_ratio = 0.5
                     mean_val = 128
                 
-                # Occupancy if high dark ratio (>0.4) OR low mean (<100) - tune based on board
-                occupancy = (dark_ratio > 0.4) or (mean_val < 100)
+                # Tuned occupancy: Stricter for pieces (dark_ratio >0.6 OR mean <80)
+                occupancy = (dark_ratio > 0.6) or (mean_val < 80)
                 grid[row, col] = occupancy
                 occupancy_stats.append((row, col, mean_val, dark_ratio, occupancy))
                 print(f"DEBUG VISION: Square r{row}c{col}: mean={mean_val:.1f}, dark_ratio={dark_ratio:.2f}, occupied={occupancy}")
@@ -142,7 +144,7 @@ class VisionMediaPipeDetector:
         print(f"DEBUG VISION: Current FEN: {current_fen}")
         print("DEBUG VISION: Previous FEN: ", self.previous_fen)
         
-        # New: Always compute diff, even if FEN same (FEN might not capture all due to utils)
+        # Always compute diff, even if FEN same (FEN might not capture all due to utils)
         old_grid = fen_to_grid(self.previous_fen)
         print("DEBUG VISION: Old grid:\n", old_grid)
         print("DEBUG VISION: Current grid:\n", current_grid)
@@ -193,7 +195,7 @@ class VisionMediaPipeDetector:
         
         print(f"DEBUG VISION: Final move_uci='{move_uci}', conf={move_conf:.2f}")
         
-        # New: Periodic full sync to handle setup/multi-moves
+        # Periodic full sync to handle setup/multi-moves
         if self.scan_count % 3 == 0 or num_changes > 4:  # Every 3rd scan or big diff
             print("DEBUG VISION: Periodic sync — updating previous to current")
             self.previous_fen = current_fen
