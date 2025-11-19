@@ -1,7 +1,13 @@
 from adafruit_servokit import ServoKit
 import math
 import time
-from shared.utils import load_json  # Your existing
+import sys
+import os
+
+# Add parent directory to Python path to import shared module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from shared.utils import load_json
 
 class MotionController:
     def __init__(self):
