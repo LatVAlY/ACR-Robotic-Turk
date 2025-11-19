@@ -20,8 +20,11 @@ class MotionController:
         self.channels = self.config.get('servo_channels', {})  # Load channels
         self.fold_angles = self.config.get('fold_angles', {'park': 90, 'stand_up': 0, 'lay_down': 180})
         self.kit = ServoKit(channels=16)
-        for i in range(6):
-            self.kit.servo[i].set_pulse_width_range(500, 2500)
+        for i in range(6):  # Arm only
+            try:
+                self.kit.servo[i].set_pulse_width_range(500, 2500)
+            except Exception as e:
+                print(f"Warning: Servo {i} range set failed: {e}")
         # New state vars
         self.state = 'unfolded'  # 'folded' or 'unfolded'
         self.power_on = True
@@ -29,61 +32,79 @@ class MotionController:
         self.init_servos()  # Wake servos to set initial angles
 
     def init_servos(self):
-        # Park arm + hinges
-        for name, ch in self.channels.items():
-            if name == 'fold_hinges':
-                for c in ch:
-                    self.kit.servo[c].angle = self.fold_angles['park']
-            else:
+        print("Initializing servos to park...")
+        for ch in range(16):  # All safe
+            try:
                 self.kit.servo[ch].angle = self.fold_angles['park']
+            except Exception as e:
+                print(f"Warning: Servo {ch} park failed: {e}")
         time.sleep(0.5)
 
     def home_position(self):
-        # Home arm (0-5) + lift shoulder to stand_up
+        print("Homing arm...")
         for i in range(6):
-            self.ease_to_angle(i, self.kit.servo[i].angle, self.fold_angles['park'])
-        shoulder_ch = self.channels['shoulder']
-        self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['stand_up'])
+            try:
+                self.ease_to_angle(i, self.kit.servo[i].angle, self.fold_angles['park'])
+            except Exception as e:
+                print(f"Home servo {i} failed: {e}")
+        # Shoulder stand-up (use config ch or fallback 1)
+        shoulder_ch = self.channels.get('shoulder', 1)
+        try:
+            self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['stand_up'])
+        except Exception as e:
+            print(f"Shoulder stand-up failed: {e}")
         time.sleep(1)
 
     def fold_to_position(self):
         if self.state == 'unfolded' and self.power_on:
-            print("Folding to storage position...")
-            self.home_position()  # Stands up first
-            hinge_chs = self.channels['fold_hinges']
+            print("Folding...")
+            self.home_position()
+            hinge_chs = self.channels.get('fold_hinges', [13,14,15])
             for ch in hinge_chs:
-                self.ease_to_angle(ch, self.kit.servo[ch].angle, 0)  # Fold closed
+                try:
+                    self.ease_to_angle(ch, self.kit.servo[ch].angle, 0)  # Close
+                except Exception as e:
+                    print(f"Hinge {ch} failed: {e}")
             time.sleep(1)
             self.state = 'folded'
             self.rotation_enabled = False
             self.turn_off()
-            print("Robot folded (standing) and off.")
+            print("Fold complete.")
         else:
             print("Cannot fold.")
 
     def unfold_to_normal(self, force=False):
         if self.state == 'folded' or force:
-            print("Unfolding to normal position...")
-            hinge_chs = self.channels['fold_hinges']
+            print("Unfolding...")
+            hinge_chs = self.channels.get('fold_hinges', [13,14,15])
             for ch in hinge_chs:
-                self.ease_to_angle(ch, self.kit.servo[ch].angle, self.fold_angles['park'])
+                try:
+                    self.ease_to_angle(ch, self.kit.servo[ch].angle, self.fold_angles['park'])  # Open
+                except Exception as e:
+                    print(f"Hinge {ch} failed: {e}")
             time.sleep(1)
-            shoulder_ch = self.channels['shoulder']
-            self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['park'])
+            shoulder_ch = self.channels.get('shoulder', 1)
+            try:
+                self.ease_to_angle(shoulder_ch, self.kit.servo[shoulder_ch].angle, self.fold_angles['park'])  # Ready
+            except Exception as e:
+                print(f"Shoulder ready failed: {e}")
             self.state = 'unfolded'
             self.wake_up()
             self.rotation_enabled = True
             self.init_servos()
-            print("Robot unfolded and on.")
+            print("Unfold complete.")
         else:
-            print("Already unfolded—no action.") 
+            print("Already unfolded.")
 
     def turn_off(self):
         if self.power_on:
             self.power_on = False
             for ch in range(16):
-                self.kit.servo[ch].angle = self.fold_angles['park']
-            print("Power off: All parked.")
+                try:
+                    self.kit.servo[ch].angle = self.fold_angles['park']
+                except Exception:
+                    pass  # Ignore
+            print("Power off: Parked.")
 
     def wake_up(self):
         if not self.power_on:
@@ -95,46 +116,45 @@ class MotionController:
         if self.state == 'folded' or not self.power_on:
             print("Cannot rotate.")
             return False
-        rot_ch = self.channels['rotation']
+        rot_ch = self.channels.get('rotation', 6)
         start = self.kit.servo[rot_ch].angle
-        target = min(180, (start + degrees) % 360)
+        target = max(0, min(180, (start + degrees) % 360))
         self.ease_to_angle(rot_ch, start, target)
         print("Rotation done.")
-        return True              
+        return True           
 
     def inverse_kinematics(self, x, y, z):
-        # Base rotation (theta1)
-        theta1 = math.degrees(math.atan2(y, x))
-        
-        # Distance in arm plane (r = projection on xy, d = full reach)
-        r = math.sqrt(x**2 + y**2)
-        d = math.sqrt(r**2 + (z - self.arm_lengths['l3'])**2)
-        
-        # Elbow angle (theta3) using law of cosines
-        cos_theta3 = (self.arm_lengths['l1']**2 + self.arm_lengths['l2']**2 - d**2) / (2 * self.arm_lengths['l1'] * self.arm_lengths['l2'])
-        theta3 = math.degrees(math.acos(max(min(cos_theta3, 1), -1)))
-        
-        # Shoulder angle (theta2)
-        sin_theta3 = math.sin(math.radians(theta3))
-        cos_theta3 = math.cos(math.radians(theta3))
-        theta2 = math.degrees(math.atan2(z - self.arm_lengths['l3'], r)) - math.degrees(math.atan2(self.arm_lengths['l2'] * sin_theta3, self.arm_lengths['l1'] + self.arm_lengths['l2'] * cos_theta3))
-        
-        # Wrist angles for gripper down
-        theta4 = 0  # Rotate neutral
-        theta5 = 45  # Pitch down for pick
-        theta6 = 0  # Gripper open
-        
-        # Clamp angles to servo limits (0-180)
-        angles = [max(0, min(180, a)) for a in [theta1, theta2, theta3, theta4, theta5, theta6]]
-        return angles
+        try:
+            theta1 = math.degrees(math.atan2(y, x))
+            r = math.sqrt(x**2 + y**2)
+            d = math.sqrt(r**2 + (z - self.arm_lengths['l3'])**2)
+            cos_theta3 = (self.arm_lengths['l1']**2 + self.arm_lengths['l2']**2 - d**2) / (2 * self.arm_lengths['l1'] * self.arm_lengths['l2'])
+            if not -1 <= cos_theta3 <= 1:  # Invalid reach
+                raise ValueError("IK unreachable position")
+            theta3 = math.degrees(math.acos(cos_theta3))
+            sin_theta3 = math.sin(math.radians(theta3))
+            cos_theta3 = math.cos(math.radians(theta3))
+            theta2 = math.degrees(math.atan2(z - self.arm_lengths['l3'], r)) - math.degrees(math.atan2(self.arm_lengths['l2'] * sin_theta3, self.arm_lengths['l1'] + self.arm_lengths['l2'] * cos_theta3))
+            theta4 = 0
+            theta5 = 45
+            theta6 = 0
+            angles = [max(0, min(180, a)) for a in [theta1, theta2, theta3, theta4, theta5, theta6]]
+            return angles
+        except Exception as e:
+            print(f"IK failed ({e}) - fallback to park")
+            return [90] * 6  # Safe park
 
     def ease_to_angle(self, servo_id, start, end, steps=20):
         if start is None:
-            start = 90  # Fallback if initial angle not set
+            start = 90
         for step in range(steps):
             angle = start + (end - start) * step / steps
-            self.kit.servo[servo_id].angle = angle
-            time.sleep(0.05)  # 50ms/step = 1 sec total
+            clamped = max(0, min(180, angle))  # CRITICAL: Clamp here
+            try:
+                self.kit.servo[servo_id].angle = clamped
+            except ValueError as e:
+                print(f"Clamped angle {clamped} still failed on servo {servo_id}: {e}")
+            time.sleep(0.05)
 
     def move_to_square(self, square, z_hover=5, z_pick=1):
         # Map square to (x,y) (board centered at 0,0)
@@ -174,7 +194,7 @@ class MotionController:
             return True
         except Exception as e:
             print(f"Motion error: {e} — retrying home")
-            self.home_position()
+            self.home_position()  # Safe retry
             return False
 
 # Quick Usage Example (add to your main script)
