@@ -1,6 +1,12 @@
 import cv2
 import chess
 import numpy as np
+import sys
+import os
+
+# Add parent directory to Python path to import shared module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from shared.utils import fen_to_grid, grid_to_fen
 
 class VisionDetector:

@@ -1,13 +1,20 @@
 import time
 import chess
 import requests
+import sys
+import os
+
+# Add parent directory to Python path to import shared module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from motion import MotionController
 from ux import UXHandler
 from vision_mediapip import VisionMediaPipeDetector
-from utils import load_json
+from shared.utils import load_json
 
-SERVER_URL = load_json('shared/config.json')['server_url']
+# Use path relative to project root
+config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'shared', 'config.json')
+SERVER_URL = load_json(config_path)['server_url']
 BOARD = chess.Board()
 
 class ChessBotClient:
