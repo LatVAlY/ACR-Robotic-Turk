@@ -30,7 +30,7 @@ class ServoTester:
                 'body_2': 90,
             },
             'fold': {
-                'base': 90,
+                'base': 0,         # Will rotate here in sequence
                 'grip': 45,        # Slightly closed
                 'grip_mouth': 45,
                 'body_1': 0,       # Fold down
@@ -85,8 +85,15 @@ class ServoTester:
             time.sleep(0.3)
         print("\n=== ALL CENTERED AT 90° ===")
     
-    def move_to_preset(self, preset_name, smooth=True):
-        """Move to preset position with optional sequencing"""
+    def park_all(self):
+        """Park all servos to 90° (safe middle position)"""
+        print("\n=== PARKING ALL SERVOS ===")
+        for ch in range(16):
+            self.safe_angle(ch, 90)
+        print("All parked at 90°\n")
+    
+    def move_to_preset(self, preset_name):
+        """Move to preset position with smart sequencing"""
         if preset_name not in self.presets:
             print(f"✗ Unknown preset. Available: {list(self.presets.keys())}\n")
             return
@@ -97,7 +104,7 @@ class ServoTester:
         if preset_name == 'fold':
             print("  Step 1: Rotating base LEFT for clearance...")
             base_ch = self.servo_map['base']
-            self.safe_angle(base_ch, 0)  # Rotate left (adjust if needed)
+            self.safe_angle(base_ch, 0)
             time.sleep(0.5)
             
             print("  Step 2: Folding arm down...")
@@ -140,7 +147,9 @@ class ServoTester:
         print("  angle <ch> <deg>   - Set angle (e.g., 'angle 5 45')")
         print("  scan               - Test all channels 0-15")
         print("  park               - Park all to 90°")
-        print("  map <name> <ch>    - Map servo (e.g., 'map grip 5')")
+        print("  preset <name>      - Go to preset (fold/unfold/reach/park)")
+        print("  list               - List all presets")
+        print("  save <name>        - Save current position as preset")
         print("  show               - Show current mapping")
         print("  quit               - Exit")
         print("="*50 + "\n")
@@ -193,20 +202,10 @@ class ServoTester:
                     self.presets[preset_name] = current_pos
                     print(f"✓ Saved current position as '{preset_name}'\n")
                 
-                elif cmd[0] == 'map' and len(cmd) == 3:
-                    name = cmd[1]
-                    ch = int(cmd[2])
-                    if name in self.servo_map:
-                        self.servo_map[name] = ch
-                        print(f"✓ Mapped '{name}' → Channel {ch}")
-                    else:
-                        print(f"✗ Unknown servo name. Use: {list(self.servo_map.keys())}")
-                
                 elif cmd[0] == 'show':
                     print("\nCurrent Mapping:")
                     for name, ch in self.servo_map.items():
-                        status = f"Ch{ch}" if ch is not None else "NOT SET"
-                        print(f"  {name:15} → {status}")
+                        print(f"  {name:15} → Ch{ch}")
                     print()
                 
                 else:
