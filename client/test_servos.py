@@ -11,14 +11,45 @@ class ServoTester:
             except:
                 pass
         
-        # Discovered servo mapping (update as you test)
+        # Discovered servo mapping (TESTED & CONFIRMED)
         self.servo_map = {
-            'grip_mouth': None,    # Channel TBD
-            'grip': None,          # Channel TBD
-            'body_1': None,        # Channel TBD
-            'body_2': None,        # Channel TBD
-            'body_3': None,        # Channel TBD
-            'base_rotation': None  # Channel TBD
+            'base': 0,           # Base rotation
+            'grip': 1,           # Gripper open/close
+            'grip_mouth': 2,     # Gripper mouth/jaw
+            'body_1': 4,         # Body servo 1
+            'body_2': 3,         # Body servo 2
+        }
+        
+        # Position presets (adjust these as you test!)
+        self.presets = {
+            'park': {
+                'base': 90,
+                'grip': 90,
+                'grip_mouth': 90,
+                'body_1': 90,
+                'body_2': 90,
+            },
+            'fold': {
+                'base': 90,
+                'grip': 45,        # Slightly closed
+                'grip_mouth': 45,
+                'body_1': 0,       # Fold down
+                'body_2': 0,       # Fold down
+            },
+            'unfold': {
+                'base': 90,
+                'grip': 90,        # Open
+                'grip_mouth': 90,
+                'body_1': 90,      # Stand up
+                'body_2': 90,      # Stand up
+            },
+            'reach': {
+                'base': 90,
+                'grip': 90,
+                'grip_mouth': 90,
+                'body_1': 135,     # Extend forward
+                'body_2': 45,      # Lower joint
+            },
         }
     
     def safe_angle(self, channel, angle):
@@ -100,6 +131,37 @@ class ServoTester:
                 
                 elif cmd[0] == 'park':
                     self.park_all()
+                
+                elif cmd[0] == 'preset' and len(cmd) == 2:
+                    preset_name = cmd[1]
+                    if preset_name in self.presets:
+                        print(f"\n→ Moving to '{preset_name}' position...")
+                        for servo_name, angle in self.presets[preset_name].items():
+                            ch = self.servo_map[servo_name]
+                            self.safe_angle(ch, angle)
+                            time.sleep(0.1)
+                        print(f"✓ '{preset_name}' complete\n")
+                    else:
+                        print(f"✗ Unknown preset. Available: {list(self.presets.keys())}\n")
+                
+                elif cmd[0] == 'list':
+                    print("\nAvailable Presets:")
+                    for name, positions in self.presets.items():
+                        print(f"\n  {name}:")
+                        for servo, angle in positions.items():
+                            print(f"    {servo:12} → {angle}°")
+                    print()
+                
+                elif cmd[0] == 'save' and len(cmd) == 2:
+                    preset_name = cmd[1]
+                    current_pos = {}
+                    for servo_name, ch in self.servo_map.items():
+                        try:
+                            current_pos[servo_name] = int(self.kit.servo[ch].angle)
+                        except:
+                            current_pos[servo_name] = 90
+                    self.presets[preset_name] = current_pos
+                    print(f"✓ Saved current position as '{preset_name}'\n")
                 
                 elif cmd[0] == 'map' and len(cmd) == 3:
                     name = cmd[1]
