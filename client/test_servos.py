@@ -45,10 +45,24 @@ class ServoTester:
             },
             'reach': {
                 'base': 90,
-                'grip': 90,
+                'grip': 90,        # Open
                 'grip_mouth': 90,
                 'body_1': 135,     # Extend forward
                 'body_2': 45,      # Lower joint
+            },
+            'grip_piece': {
+                'base': 90,
+                'grip': 30,        # Closed grip
+                'grip_mouth': 30,  # Closed mouth
+                'body_1': 135,
+                'body_2': 45,
+            },
+            'lift': {
+                'base': 90,
+                'grip': 30,        # Keep closed
+                'grip_mouth': 30,
+                'body_1': 90,      # Lift up
+                'body_2': 90,
             },
         }
     
@@ -136,6 +150,56 @@ class ServoTester:
                 time.sleep(0.1)
         
         print(f"✓ '{preset_name}' complete\n")
+    
+    def chess_move_sequence(self, rotate_degrees=45):
+        """Execute a complete chess move: reach → grip → lift → rotate → place → release"""
+        print("\n" + "="*50)
+        print("CHESS MOVE SEQUENCE")
+        print("="*50)
+        
+        # Step 1: Reach to piece
+        print("\n[1/6] Reaching to piece...")
+        self.move_to_preset('reach')
+        time.sleep(0.5)
+        
+        # Step 2: Grip the piece
+        print("\n[2/6] Gripping piece...")
+        self.move_to_preset('grip_piece')
+        time.sleep(0.5)
+        
+        # Step 3: Lift piece up
+        print("\n[3/6] Lifting piece...")
+        self.move_to_preset('lift')
+        time.sleep(0.5)
+        
+        # Step 4: Rotate to destination
+        print(f"\n[4/6] Rotating {rotate_degrees}° to destination...")
+        base_ch = self.servo_map['base']
+        current_angle = self.kit.servo[base_ch].angle
+        new_angle = max(0, min(180, current_angle + rotate_degrees))
+        self.safe_angle(base_ch, new_angle)
+        time.sleep(0.8)
+        
+        # Step 5: Lower to place piece
+        print("\n[5/6] Lowering to board...")
+        self.move_to_preset('reach')
+        time.sleep(0.5)
+        
+        # Step 6: Release piece
+        print("\n[6/6] Releasing piece...")
+        grip_ch = self.servo_map['grip']
+        grip_mouth_ch = self.servo_map['grip_mouth']
+        self.safe_angle(grip_ch, 90)
+        self.safe_angle(grip_mouth_ch, 90)
+        time.sleep(0.5)
+        
+        # Return to park
+        print("\n[DONE] Returning to park...")
+        self.move_to_preset('park')
+        
+        print("\n" + "="*50)
+        print("✓ Chess move complete!")
+        print("="*50 + "\n")
     
     def interactive_test(self):
         """Interactive testing mode"""
