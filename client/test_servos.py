@@ -266,6 +266,12 @@ class ServoTester:
                     self.presets[preset_name] = current_pos
                     print(f"✓ Saved current position as '{preset_name}'\n")
                 
+                elif cmd[0] == 'move':
+                    rotate_deg = 45  # Default
+                    if len(cmd) == 2:
+                        rotate_deg = int(cmd[1])
+                    self.chess_move_sequence(rotate_deg)
+                
                 elif cmd[0] == 'show':
                     print("\nCurrent Mapping:")
                     for name, ch in self.servo_map.items():
